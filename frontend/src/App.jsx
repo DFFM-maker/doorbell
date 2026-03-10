@@ -5,6 +5,7 @@ import ConciergeView from './views/ConciergeView'
 import OpsView       from './views/OpsView'
 import BottomNav     from './components/BottomNav'
 import AuthScreen    from './components/AuthScreen'
+import { useDoorbellSound } from './hooks/useDoorbellSound'
 
 const LS_KEY = 'doorbell_api_key'
 
@@ -47,6 +48,9 @@ export default function App() {
   const [events,        setEvents]        = useState([...INITIAL_EVENTS].reverse())
   const sseRef = useRef(null)
 
+  // ── Audio ──────────────────────────────────────────────────────────────────
+  const { playDingDong, unlock } = useDoorbellSound()
+
   // ── Auth helpers ───────────────────────────────────────────────────────────
   const apiFetch = useCallback((url, opts = {}) => {
     return fetch(url, {
@@ -56,6 +60,7 @@ export default function App() {
   }, [apiKey])
 
   const handleAuth = useCallback(async (key) => {
+    unlock() // sblocca AudioContext su iOS al primo gesto utente
     const res = await fetch('/api/v1/status', { headers: { 'X-API-Key': key } })
     if (res.ok) {
       localStorage.setItem(LS_KEY, key)
@@ -65,7 +70,7 @@ export default function App() {
       setAuthError(true)
       setTimeout(() => setAuthError(false), 1500)
     }
-  }, [])
+  }, [unlock])
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem(LS_KEY)
@@ -108,6 +113,14 @@ export default function App() {
       })
       .catch(console.error)
   }, [apiFetch, handleLogout])
+
+  // ── Suono campanello ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (status !== 'ringing') return
+    playDingDong()
+    const t = setInterval(playDingDong, 5000)
+    return () => clearInterval(t)
+  }, [status, playDingDong])
 
   // ── SSE real-time ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -197,7 +210,7 @@ export default function App() {
   const bgMap = { sentinel: 'bg-black', concierge: 'bg-white', ops: 'bg-geist-gray-50' }
 
   return (
-    <div className={`fixed inset-0 flex flex-col ${bgMap[view]} transition-colors duration-300`}>
+    <div className={`fixed inset-0 flex flex-col ${bgMap[view]} transition-colors duration-300`} onClick={unlock}>
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
