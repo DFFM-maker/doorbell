@@ -54,9 +54,8 @@ export default function VideoCard({ streamUrls, status, dark = true, compact = f
       {/* iOS: snapshot polling */}
       {isIOS && snapSrc ? (
         <img
-          key={snapSrc}
           src={snapSrc}
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+          className={`absolute inset-0 w-full h-full object-cover ${loaded ? 'opacity-100' : 'opacity-0'}`}
           alt="Live"
           onLoad={() => setLoaded(true)}
           onError={() => setImgError(true)}
