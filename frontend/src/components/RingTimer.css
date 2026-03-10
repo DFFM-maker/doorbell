@@ -1,0 +1,26 @@
+.rt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rt-text {
+  font-size: 0.8rem;
+  color: var(--text2);
+}
+
+.rt-bar {
+  width: 180px;
+  height: 4px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.rt-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width 1s linear;
+  opacity: calc(var(--pct) / 100 * 0.8 + 0.2);
+}

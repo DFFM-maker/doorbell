@@ -1,0 +1,43 @@
+.sb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sb--gray {
+  background: rgba(255,255,255,0.08);
+  color: var(--text2);
+}
+
+.sb--red {
+  background: rgba(233, 69, 96, 0.2);
+  color: var(--accent);
+  border: 1px solid rgba(233, 69, 96, 0.5);
+}
+
+.sb--green {
+  background: rgba(0, 212, 170, 0.15);
+  color: var(--green);
+}
+
+.sb-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sb--pulse .sb-dot {
+  animation: sb-blink 0.8s ease-in-out infinite;
+}
+
+@keyframes sb-blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.7); }
+}
