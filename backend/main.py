@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
@@ -130,21 +130,33 @@ app.add_middleware(
 )
 
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Solo le rotte /api/ richiedono autenticazione
-        if request.url.path.startswith("/api/"):
-            # Accetta chiave via header o query param (necessario per EventSource)
-            key = (
-                request.headers.get("X-API-Key")
-                or request.query_params.get("key")
-            )
-            if not WEB_API_KEY or key != WEB_API_KEY:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Unauthorized"},
-                )
-        return await call_next(request)
+class APIKeyMiddleware:
+    """Middleware ASGI puro — non bufferizza StreamingResponse (fix MJPEG/SSE)."""
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path.startswith("/api/"):
+                # Chiave via header X-API-Key
+                headers = {k.lower(): v for k, v in scope.get("headers", [])}
+                api_key = headers.get(b"x-api-key", b"").decode()
+
+                # Fallback: chiave via query param ?key= (EventSource, MJPEG img)
+                if not api_key:
+                    qs = scope.get("query_string", b"").decode()
+                    for part in qs.split("&"):
+                        if part.startswith("key="):
+                            api_key = part[4:]
+                            break
+
+                if not WEB_API_KEY or api_key != WEB_API_KEY:
+                    resp = JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                    await resp(scope, receive, send)
+                    return
+
+        await self.app(scope, receive, send)
 
 
 app.add_middleware(APIKeyMiddleware)
