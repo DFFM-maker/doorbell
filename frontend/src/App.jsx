@@ -85,7 +85,10 @@ export default function App() {
     if (!apiKey) return
     apiFetch('/api/v1/frigate/stream-url')
       .then(r => r.json())
-      .then(d => setStreamUrls({ mjpeg: d.mjpeg + `?key=${encodeURIComponent(apiKey)}`, snapshot: d.snapshot }))
+      .then(d => {
+        const k = `?key=${encodeURIComponent(apiKey)}`
+        setStreamUrls({ mjpeg: d.mjpeg + k, snapshot: d.snapshot + k })
+      })
       .catch(console.error)
   }, [apiFetch, apiKey])
 

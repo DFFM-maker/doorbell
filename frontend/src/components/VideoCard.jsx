@@ -1,6 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
-// Simulated stream metadata (MJPEG non espone bitrate reale)
+// Safari/iOS non supporta MJPEG multipart in <img> — usa snapshot polling
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+
 const STREAM_META = { codec: 'H.264', fps: '25', bitrate: '2.1 Mbps' }
 
 function NoSignal() {
@@ -21,9 +23,25 @@ function NoSignal() {
 }
 
 export default function VideoCard({ streamUrls, status, dark = true, compact = false }) {
+  const [loaded,   setLoaded]   = useState(false)
   const [imgError, setImgError] = useState(false)
-  const [loaded, setLoaded] = useState(false)
+  // iOS snapshot polling
+  const [snapSrc,  setSnapSrc]  = useState(null)
+  const timerRef = useRef(null)
   const isRinging = status === 'ringing'
+
+  // iOS: snapshot polling ogni 500ms invece di MJPEG
+  useEffect(() => {
+    if (!isIOS || !streamUrls?.snapshot) return
+
+    const refresh = () => {
+      // Bust cache aggiungendo timestamp
+      setSnapSrc(streamUrls.snapshot + (streamUrls.snapshot.includes('?') ? '&' : '?') + '_t=' + Date.now())
+    }
+    refresh()
+    timerRef.current = setInterval(refresh, 500)
+    return () => clearInterval(timerRef.current)
+  }, [streamUrls?.snapshot])
 
   const aspectClass = compact ? 'aspect-video' : 'aspect-[16/10]'
   const borderClass = dark
@@ -33,8 +51,20 @@ export default function VideoCard({ streamUrls, status, dark = true, compact = f
   return (
     <div className={`relative w-full ${aspectClass} rounded-geist overflow-hidden bg-black ${borderClass}`}>
 
-      {/* Stream MJPEG */}
-      {streamUrls?.mjpeg && !imgError ? (
+      {/* iOS: snapshot polling */}
+      {isIOS && snapSrc ? (
+        <img
+          key={snapSrc}
+          src={snapSrc}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+          alt="Live"
+          onLoad={() => setLoaded(true)}
+          onError={() => setImgError(true)}
+        />
+      ) : null}
+
+      {/* Desktop: MJPEG nativo */}
+      {!isIOS && streamUrls?.mjpeg && !imgError ? (
         <img
           src={streamUrls.mjpeg}
           className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${loaded ? 'opacity-100' : 'opacity-0'}`}
@@ -44,7 +74,7 @@ export default function VideoCard({ streamUrls, status, dark = true, compact = f
         />
       ) : null}
 
-      {/* No signal se non caricato o errore */}
+      {/* No signal */}
       {(!loaded || imgError) && <NoSignal />}
 
       {/* LIVE badge */}
@@ -60,7 +90,7 @@ export default function VideoCard({ streamUrls, status, dark = true, compact = f
         <div className="absolute bottom-0 left-0 right-0 px-3 py-2
           bg-gradient-to-t from-black/80 to-transparent">
           <p className="font-mono text-[9px] text-white/50 tracking-wide">
-            {STREAM_META.codec} &nbsp;•&nbsp; {STREAM_META.bitrate} &nbsp;•&nbsp; {STREAM_META.fps} fps
+            {STREAM_META.codec} &nbsp;•&nbsp; {STREAM_META.bitrate} &nbsp;•&nbsp; {isIOS ? '2 fps' : STREAM_META.fps + ' fps'}
           </p>
         </div>
       )}

@@ -281,7 +281,7 @@ async def ptz_goto(token: str):
 
 
 @app.get("/api/v1/events")
-async def sse_events(request) -> EventSourceResponse:
+async def sse_events(request: Request) -> EventSourceResponse:
     """Server-Sent Events stream for real-time status updates."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=10)
     state.sse_clients.append(queue)
