@@ -135,10 +135,13 @@ class APIKeyMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
 
+    # Endpoint chiamati da server (HA) — non richiedono web API key
+    _EXEMPT = {"/api/v1/ring"}
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] == "http":
             path = scope.get("path", "")
-            if path.startswith("/api/"):
+            if path.startswith("/api/") and path not in self._EXEMPT:
                 # Chiave via header X-API-Key
                 headers = {k.lower(): v for k, v in scope.get("headers", [])}
                 api_key = headers.get(b"x-api-key", b"").decode()
