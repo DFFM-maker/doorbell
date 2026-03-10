@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
@@ -34,6 +35,7 @@ CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.111")
 CAMERA_USER = os.getenv("CAMERA_USER", "admin")
 CAMERA_PASS = os.getenv("CAMERA_PASS", "")
 CAMERA_PORT = int(os.getenv("CAMERA_PORT", "80"))
+WEB_API_KEY = os.getenv("WEB_API_KEY", "")
 PTZ_PRESET_RING = os.getenv("PTZ_PRESET_RING", "4")
 PTZ_PRESET_IDLE = os.getenv("PTZ_PRESET_IDLE", "1")
 RING_TIMEOUT = int(os.getenv("RING_TIMEOUT", "120"))
@@ -126,6 +128,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Solo le rotte /api/ richiedono autenticazione
+        if request.url.path.startswith("/api/"):
+            # Accetta chiave via header o query param (necessario per EventSource)
+            key = (
+                request.headers.get("X-API-Key")
+                or request.query_params.get("key")
+            )
+            if not WEB_API_KEY or key != WEB_API_KEY:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Unauthorized"},
+                )
+        return await call_next(request)
+
+
+app.add_middleware(APIKeyMiddleware)
 
 
 # --- API Routes ---
@@ -485,16 +507,18 @@ frontend_dist = "/opt/doorbell/frontend/dist"
 if os.path.exists(frontend_dist):
     app.mount("/assets", StaticFiles(directory=f"{frontend_dist}/assets"), name="assets")
 
+    _NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
+
     @app.get("/")
     async def serve_index():
-        return FileResponse(f"{frontend_dist}/index.html")
+        return FileResponse(f"{frontend_dist}/index.html", headers=_NO_CACHE)
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         file_path = f"{frontend_dist}/{full_path}"
         if os.path.exists(file_path) and os.path.isfile(file_path):
             return FileResponse(file_path)
-        return FileResponse(f"{frontend_dist}/index.html")
+        return FileResponse(f"{frontend_dist}/index.html", headers=_NO_CACHE)
 
 
 if __name__ == "__main__":

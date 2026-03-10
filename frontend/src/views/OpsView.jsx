@@ -70,7 +70,7 @@ export default function OpsView({ events, status }) {
         </span>
       </header>
 
-      <div className="flex flex-col gap-4 px-4 py-4">
+      <div className="flex flex-col gap-4 px-4 py-4 pb-24">
 
         {/* Hardware stats */}
         <div>

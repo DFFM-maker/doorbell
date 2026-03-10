@@ -124,7 +124,7 @@ export default function ConciergeView({ status, streamUrls, gateState, onOpenGat
         </div>
 
         {/* Gate button */}
-        <div className="px-4 py-4">
+        <div className="px-4 pt-4 pb-24">
           <GateBtn state={gateState} onClick={onOpenGate} />
         </div>
 

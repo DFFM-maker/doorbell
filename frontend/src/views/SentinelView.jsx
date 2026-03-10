@@ -155,7 +155,7 @@ export default function SentinelView({
         </div>
       </header>
 
-      <div className="flex flex-col gap-3 px-4 pb-4">
+      <div className="flex flex-col gap-3 px-4 pb-24">
 
         {/* Video */}
         <VideoCard streamUrls={streamUrls} status={status} dark />

@@ -4,6 +4,9 @@ import SentinelView  from './views/SentinelView'
 import ConciergeView from './views/ConciergeView'
 import OpsView       from './views/OpsView'
 import BottomNav     from './components/BottomNav'
+import AuthScreen    from './components/AuthScreen'
+
+const LS_KEY = 'doorbell_api_key'
 
 // ── Event log helpers ────────────────────────────────────────────────────────
 let _eid = 0
@@ -31,63 +34,95 @@ function slideVariants(prev, next) {
 
 // ── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [apiKey,        setApiKey]        = useState(() => localStorage.getItem(LS_KEY) || '')
+  const [authError,     setAuthError]     = useState(false)
   const [view,          setView]          = useState('sentinel')
   const [prevView,      setPrevView]      = useState('sentinel')
   const [status,        setStatus]        = useState('idle')
   const [streamUrls,    setStreamUrls]    = useState(null)
   const [currentPreset, setCurrentPreset] = useState('')
   const [presets,       setPresets]       = useState([])
-  const [gateState,     setGateState]     = useState('idle')   // idle | loading | success | error
-  const [ptzLoading,    setPtzLoading]    = useState(null)     // token in movimento
+  const [gateState,     setGateState]     = useState('idle')
+  const [ptzLoading,    setPtzLoading]    = useState(null)
   const [events,        setEvents]        = useState([...INITIAL_EVENTS].reverse())
   const sseRef = useRef(null)
+
+  // ── Auth helpers ───────────────────────────────────────────────────────────
+  const apiFetch = useCallback((url, opts = {}) => {
+    return fetch(url, {
+      ...opts,
+      headers: { 'X-API-Key': apiKey, ...(opts.headers || {}) },
+    })
+  }, [apiKey])
+
+  const handleAuth = useCallback(async (key) => {
+    const res = await fetch('/api/v1/status', { headers: { 'X-API-Key': key } })
+    if (res.ok) {
+      localStorage.setItem(LS_KEY, key)
+      setApiKey(key)
+      setAuthError(false)
+    } else {
+      setAuthError(true)
+      setTimeout(() => setAuthError(false), 1500)
+    }
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem(LS_KEY)
+    setApiKey('')
+  }, [])
 
   const addEvent = useCallback((type, message) =>
     setEvents(prev => [mkEvent(type, message), ...prev].slice(0, 60)), [])
 
   // ── Fetch stream URLs ──────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/v1/frigate/stream-url')
+    if (!apiKey) return
+    apiFetch('/api/v1/frigate/stream-url')
       .then(r => r.json())
-      .then(setStreamUrls)
+      .then(d => setStreamUrls({ mjpeg: d.mjpeg + `?key=${encodeURIComponent(apiKey)}`, snapshot: d.snapshot }))
       .catch(console.error)
-  }, [])
+  }, [apiFetch, apiKey])
 
   // ── Fetch PTZ presets ──────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/v1/ptz/presets')
+    if (!apiKey) return
+    apiFetch('/api/v1/ptz/presets')
       .then(r => r.json())
       .then(d => {
         setPresets(d.presets || [])
         if (d.current) setCurrentPreset(d.current)
       })
       .catch(console.error)
-  }, [])
+  }, [apiFetch])
 
   // ── Fetch initial status ───────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/v1/status')
-      .then(r => r.json())
+    if (!apiKey) return
+    apiFetch('/api/v1/status')
+      .then(r => { if (r.status === 401) { handleLogout(); return null } return r.json() })
       .then(d => {
+        if (!d) return
         setStatus(d.status)
         if (d.current_preset) setCurrentPreset(d.current_preset)
       })
       .catch(console.error)
-  }, [])
+  }, [apiFetch, handleLogout])
 
   // ── SSE real-time ──────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!apiKey) return
     let es, retryTimer
 
     function connect() {
-      es = new EventSource('/api/v1/events')
+      es = new EventSource(`/api/v1/events?key=${encodeURIComponent(apiKey)}`)
 
       es.addEventListener('status', e => {
         const s = e.data
         setStatus(s)
         if (s === 'ringing') {
           addEvent('DOORBELL_RING', 'Campanello premuto')
-          if (Notification?.permission === 'granted') {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             new Notification('Citofono', { body: 'Qualcuno ha suonato!', tag: 'doorbell' })
           }
         }
@@ -104,19 +139,21 @@ export default function App() {
       sseRef.current = es
     }
 
-    if (Notification?.permission === 'default') Notification.requestPermission()
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission()
     connect()
     return () => { clearTimeout(retryTimer); es?.close() }
-  }, [presets, addEvent])
+  }, [presets, addEvent, apiKey])
 
   // ── Open gate ──────────────────────────────────────────────────────────────
   const handleOpenGate = useCallback(async () => {
     if (gateState === 'loading') return
     setGateState('loading')
     try {
-      const res = await fetch('/api/v1/open-gate', { method: 'POST' })
+      const res = await apiFetch('/api/v1/open-gate', { method: 'POST' })
+      if (res.status === 401) { handleLogout(); return }
       if (res.ok) {
         setGateState('success')
+        setStatus('idle')
         addEvent('ACCESS_GRANTED', 'Cancello aperto')
       } else {
         setGateState('error')
@@ -127,25 +164,31 @@ export default function App() {
       addEvent('SYSTEM', 'Errore rete — apertura cancello fallita')
     }
     setTimeout(() => setGateState('idle'), 2500)
-  }, [gateState, addEvent])
+  }, [gateState, addEvent, apiFetch, handleLogout])
 
   // ── PTZ goto ───────────────────────────────────────────────────────────────
   const handlePresetChange = useCallback(async (token) => {
     if (ptzLoading) return
     setPtzLoading(token)
     try {
-      await fetch(`/api/v1/ptz/goto/${token}`, { method: 'POST' })
+      const res = await apiFetch(`/api/v1/ptz/goto/${token}`, { method: 'POST' })
+      if (res.status === 401) { handleLogout(); return }
       setCurrentPreset(token)
     } catch (e) {
       console.error('[App] PTZ error:', e)
     }
     setTimeout(() => setPtzLoading(null), 2000)
-  }, [ptzLoading])
+  }, [ptzLoading, apiFetch, handleLogout])
 
   // ── View change ────────────────────────────────────────────────────────────
   const handleViewChange = (next) => {
     setPrevView(view)
     setView(next)
+  }
+
+  // ── Auth gate — DOPO tutti gli hook ───────────────────────────────────────
+  if (!apiKey) {
+    return <AuthScreen onAuth={handleAuth} error={authError} />
   }
 
   const vars = slideVariants(prevView, view)
@@ -154,7 +197,7 @@ export default function App() {
   const bgMap = { sentinel: 'bg-black', concierge: 'bg-white', ops: 'bg-geist-gray-50' }
 
   return (
-    <div className={`flex flex-col h-dvh ${bgMap[view]} transition-colors duration-300`}>
+    <div className={`fixed inset-0 flex flex-col ${bgMap[view]} transition-colors duration-300`}>
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
@@ -163,7 +206,7 @@ export default function App() {
           animate={vars.animate}
           exit={vars.exit}
           transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
-          className="flex flex-col flex-1 overflow-hidden"
+          className="flex flex-col flex-1 overflow-x-hidden overflow-y-auto"
         >
           {view === 'sentinel' && (
             <SentinelView
@@ -194,7 +237,7 @@ export default function App() {
         </motion.div>
       </AnimatePresence>
 
-      <BottomNav view={view} onChange={handleViewChange} />
+      <BottomNav view={view} onChange={handleViewChange} dark={view === 'sentinel'} />
     </div>
   )
 }
