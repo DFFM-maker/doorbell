@@ -1,163 +1,200 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import VideoPlayer from './components/VideoPlayer'
-import StatusBadge from './components/StatusBadge'
-import GateButton from './components/GateButton'
-import RingTimer from './components/RingTimer'
-import PtzSelector from './components/PtzSelector'
-import './App.css'
+import { AnimatePresence, motion } from 'framer-motion'
+import SentinelView  from './views/SentinelView'
+import ConciergeView from './views/ConciergeView'
+import OpsView       from './views/OpsView'
+import BottomNav     from './components/BottomNav'
 
-const API_BASE = ''  // same origin when served by FastAPI
+// ── Event log helpers ────────────────────────────────────────────────────────
+let _eid = 0
+const mkEvent = (type, message) => ({ id: ++_eid, type, message, time: new Date() })
 
+const INITIAL_EVENTS = [
+  mkEvent('SYSTEM',          'Backend avviato'),
+  mkEvent('MOTION_DETECTED', 'Movimento rilevato — zona ingresso'),
+  mkEvent('DOORBELL_RING',   'Campanello premuto'),
+  mkEvent('ACCESS_GRANTED',  'Cancello aperto manualmente'),
+]
+
+// ── Slide transition ─────────────────────────────────────────────────────────
+const VIEW_ORDER = ['sentinel', 'concierge', 'ops']
+function slideVariants(prev, next) {
+  const pi = VIEW_ORDER.indexOf(prev)
+  const ni = VIEW_ORDER.indexOf(next)
+  const dir = ni > pi ? 1 : -1
+  return {
+    initial: { opacity: 0, x: dir * 24 },
+    animate: { opacity: 1, x: 0 },
+    exit:    { opacity: 0, x: -dir * 24 },
+  }
+}
+
+// ── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [status, setStatus] = useState('idle')       // idle | ringing | active
-  const [ringTime, setRingTime] = useState(null)
-  const [gateLoading, setGateLoading] = useState(false)
-  const [gateResult, setGateResult] = useState(null)  // null | 'ok' | 'error'
-  const [streamUrls, setStreamUrls] = useState(null)
+  const [view,          setView]          = useState('sentinel')
+  const [prevView,      setPrevView]      = useState('sentinel')
+  const [status,        setStatus]        = useState('idle')
+  const [streamUrls,    setStreamUrls]    = useState(null)
   const [currentPreset, setCurrentPreset] = useState('')
+  const [presets,       setPresets]       = useState([])
+  const [gateState,     setGateState]     = useState('idle')   // idle | loading | success | error
+  const [ptzLoading,    setPtzLoading]    = useState(null)     // token in movimento
+  const [events,        setEvents]        = useState([...INITIAL_EVENTS].reverse())
   const sseRef = useRef(null)
 
-  // Fetch stream URLs once
+  const addEvent = useCallback((type, message) =>
+    setEvents(prev => [mkEvent(type, message), ...prev].slice(0, 60)), [])
+
+  // ── Fetch stream URLs ──────────────────────────────────────────────────────
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/frigate/stream-url`)
+    fetch('/api/v1/frigate/stream-url')
       .then(r => r.json())
       .then(setStreamUrls)
-      .catch(() => {})
+      .catch(console.error)
   }, [])
 
-  // Fetch initial status
+  // ── Fetch PTZ presets ──────────────────────────────────────────────────────
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/status`)
+    fetch('/api/v1/ptz/presets')
       .then(r => r.json())
-      .then(data => {
-        setStatus(data.status)
-        if (data.ring_time) setRingTime(new Date(data.ring_time))
-        if (data.current_preset) setCurrentPreset(data.current_preset)
+      .then(d => {
+        setPresets(d.presets || [])
+        if (d.current) setCurrentPreset(d.current)
       })
-      .catch(() => {})
+      .catch(console.error)
   }, [])
 
-  // SSE for real-time updates
+  // ── Fetch initial status ───────────────────────────────────────────────────
   useEffect(() => {
-    let es
-    let retryTimeout
+    fetch('/api/v1/status')
+      .then(r => r.json())
+      .then(d => {
+        setStatus(d.status)
+        if (d.current_preset) setCurrentPreset(d.current_preset)
+      })
+      .catch(console.error)
+  }, [])
+
+  // ── SSE real-time ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    let es, retryTimer
 
     function connect() {
-      es = new EventSource(`${API_BASE}/api/v1/events`)
+      es = new EventSource('/api/v1/events')
 
-      es.addEventListener('ptz', (e) => {
-        setCurrentPreset(e.data)
-      })
-
-      es.addEventListener('status', (e) => {
-        const newStatus = e.data
-        setStatus(newStatus)
-        if (newStatus === 'ringing') {
-          setRingTime(new Date())
-          // Request notification permission and show browser notification
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('Citofono', {
-              body: 'Qualcuno ha suonato!',
-              icon: '/bell.svg',
-              tag: 'doorbell',
-            })
+      es.addEventListener('status', e => {
+        const s = e.data
+        setStatus(s)
+        if (s === 'ringing') {
+          addEvent('DOORBELL_RING', 'Campanello premuto')
+          if (Notification?.permission === 'granted') {
+            new Notification('Citofono', { body: 'Qualcuno ha suonato!', tag: 'doorbell' })
           }
-        } else if (newStatus === 'idle') {
-          setRingTime(null)
-          setGateResult(null)
         }
+        if (s === 'idle') setGateState(prev => prev === 'success' ? prev : 'idle')
       })
 
-      es.onerror = () => {
-        es.close()
-        retryTimeout = setTimeout(connect, 3000)
-      }
+      es.addEventListener('ptz', e => {
+        setCurrentPreset(e.data)
+        const name = presets.find(p => p.token === e.data)?.name ?? `Preset ${e.data}`
+        addEvent('SYSTEM', `PTZ → ${name}`)
+      })
 
+      es.onerror = () => { es.close(); retryTimer = setTimeout(connect, 3000) }
       sseRef.current = es
     }
 
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission()
-    }
-
+    if (Notification?.permission === 'default') Notification.requestPermission()
     connect()
-    return () => {
-      clearTimeout(retryTimeout)
-      es?.close()
-    }
-  }, [])
+    return () => { clearTimeout(retryTimer); es?.close() }
+  }, [presets, addEvent])
 
+  // ── Open gate ──────────────────────────────────────────────────────────────
   const handleOpenGate = useCallback(async () => {
-    setGateLoading(true)
-    setGateResult(null)
+    if (gateState === 'loading') return
+    setGateState('loading')
     try {
-      const res = await fetch(`${API_BASE}/api/v1/open-gate`, { method: 'POST' })
+      const res = await fetch('/api/v1/open-gate', { method: 'POST' })
       if (res.ok) {
-        setGateResult('ok')
+        setGateState('success')
+        addEvent('ACCESS_GRANTED', 'Cancello aperto')
       } else {
-        setGateResult('error')
+        setGateState('error')
+        addEvent('SYSTEM', `Errore apertura cancello (${res.status})`)
       }
     } catch {
-      setGateResult('error')
-    } finally {
-      setGateLoading(false)
-      setTimeout(() => setGateResult(null), 3000)
+      setGateState('error')
+      addEvent('SYSTEM', 'Errore rete — apertura cancello fallita')
     }
-  }, [])
+    setTimeout(() => setGateState('idle'), 2500)
+  }, [gateState, addEvent])
+
+  // ── PTZ goto ───────────────────────────────────────────────────────────────
+  const handlePresetChange = useCallback(async (token) => {
+    if (ptzLoading) return
+    setPtzLoading(token)
+    try {
+      await fetch(`/api/v1/ptz/goto/${token}`, { method: 'POST' })
+      setCurrentPreset(token)
+    } catch (e) {
+      console.error('[App] PTZ error:', e)
+    }
+    setTimeout(() => setPtzLoading(null), 2000)
+  }, [ptzLoading])
+
+  // ── View change ────────────────────────────────────────────────────────────
+  const handleViewChange = (next) => {
+    setPrevView(view)
+    setView(next)
+  }
+
+  const vars = slideVariants(prevView, view)
+
+  // ── BG color per view ──────────────────────────────────────────────────────
+  const bgMap = { sentinel: 'bg-black', concierge: 'bg-white', ops: 'bg-geist-gray-50' }
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <span className="header-icon">🔔</span>
-          <span className="header-title">Video Citofono</span>
-        </div>
-        <StatusBadge status={status} />
-      </header>
+    <div className={`flex flex-col h-dvh ${bgMap[view]} transition-colors duration-300`}>
 
-      <main className="app-main">
-        {/* Video feed */}
-        <div className="video-section">
-          <VideoPlayer streamUrls={streamUrls} status={status} />
-        </div>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={view}
+          initial={vars.initial}
+          animate={vars.animate}
+          exit={vars.exit}
+          transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
+          className="flex flex-col flex-1 overflow-hidden"
+        >
+          {view === 'sentinel' && (
+            <SentinelView
+              status={status}
+              streamUrls={streamUrls}
+              currentPreset={currentPreset}
+              presets={presets}
+              gateState={gateState}
+              onOpenGate={handleOpenGate}
+              onPresetChange={handlePresetChange}
+              ptzLoading={ptzLoading}
+            />
+          )}
+          {view === 'concierge' && (
+            <ConciergeView
+              status={status}
+              streamUrls={streamUrls}
+              gateState={gateState}
+              onOpenGate={handleOpenGate}
+            />
+          )}
+          {view === 'ops' && (
+            <OpsView
+              events={events}
+              status={status}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
 
-        {/* Status & timer */}
-        {status === 'ringing' && ringTime && (
-          <div className="ring-alert">
-            <div className="ring-alert-icon">🔔</div>
-            <div className="ring-alert-text">
-              <strong>Qualcuno ha suonato!</strong>
-              <RingTimer ringTime={ringTime} timeout={120} />
-            </div>
-          </div>
-        )}
-
-        {/* Selezione preset PTZ */}
-        <PtzSelector
-          currentPreset={currentPreset}
-          onPresetChange={setCurrentPreset}
-        />
-
-        {/* Gate button */}
-        <div className="actions">
-          <GateButton
-            onClick={handleOpenGate}
-            loading={gateLoading}
-            result={gateResult}
-          />
-        </div>
-
-        {/* Info footer */}
-        <div className="info-row">
-          <span className="info-chip">
-            📡 Frigate: <code>cancello_ptz</code>
-          </span>
-          <span className="info-chip">
-            🏠 HA connesso
-          </span>
-        </div>
-      </main>
+      <BottomNav view={view} onChange={handleViewChange} />
     </div>
   )
 }

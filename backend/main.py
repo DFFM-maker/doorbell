@@ -274,6 +274,45 @@ async def sse_events(request) -> EventSourceResponse:
     return EventSourceResponse(event_generator())
 
 
+@app.get("/api/v1/system/stats")
+async def system_stats():
+    """Statistiche sistema per la Ops view (CPU, temperatura, uptime)."""
+    # CPU load (1 min avg → percentuale approssimativa)
+    cpu_pct = 0
+    try:
+        with open("/proc/loadavg") as f:
+            load1 = float(f.read().split()[0])
+        with open("/proc/cpuinfo") as f:
+            cpus = f.read().count("processor\t:")
+        cpu_pct = min(round((load1 / max(cpus, 1)) * 100), 100)
+    except Exception:
+        pass
+
+    # Temperatura (prova percorsi comuni)
+    temp_c = None
+    for path in ["/sys/class/thermal/thermal_zone0/temp",
+                 "/sys/class/hwmon/hwmon0/temp1_input"]:
+        try:
+            with open(path) as f:
+                temp_c = int(f.read().strip()) // 1000
+            break
+        except Exception:
+            pass
+
+    # Uptime
+    uptime_str = "N/A"
+    try:
+        with open("/proc/uptime") as f:
+            secs = int(float(f.read().split()[0]))
+        d, rem = divmod(secs, 86400)
+        h, m   = divmod(rem, 3600)
+        uptime_str = f"{d}d {h:02d}h {m//60:02d}m"
+    except Exception:
+        pass
+
+    return {"cpu_pct": cpu_pct, "temp_c": temp_c, "uptime": uptime_str}
+
+
 @app.get("/api/v1/frigate/stream-url")
 async def frigate_stream_url():
     """Return Frigate stream URLs via backend proxy (avoids mixed-content HTTPS block)."""
