@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Config ---
-HA_URL = os.getenv("HA_URL", "http://192.168.1.1:8123")
+HA_URL      = os.getenv("HA_URL", "http://192.168.1.1:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 HA_GATE_ENTITY = os.getenv("HA_GATE_ENTITY", "switch.sonoff_1000663833_1")
 FRIGATE_URL = os.getenv("FRIGATE_URL", "http://192.168.1.9:5000")
@@ -35,10 +35,16 @@ CAMERA_IP = os.getenv("CAMERA_IP", "192.168.1.111")
 CAMERA_USER = os.getenv("CAMERA_USER", "admin")
 CAMERA_PASS = os.getenv("CAMERA_PASS", "")
 CAMERA_PORT = int(os.getenv("CAMERA_PORT", "80"))
-WEB_API_KEY = os.getenv("WEB_API_KEY", "")
-PTZ_PRESET_RING = os.getenv("PTZ_PRESET_RING", "4")
-PTZ_PRESET_IDLE = os.getenv("PTZ_PRESET_IDLE", "1")
-RING_TIMEOUT = int(os.getenv("RING_TIMEOUT", "120"))
+WEB_API_KEY      = os.getenv("WEB_API_KEY", "")
+PTZ_PRESET_RING  = os.getenv("PTZ_PRESET_RING", "4")
+PTZ_PRESET_IDLE  = os.getenv("PTZ_PRESET_IDLE", "1")
+RING_TIMEOUT     = int(os.getenv("RING_TIMEOUT", "120"))
+
+# Asterisk AMI
+AMI_HOST   = os.getenv("AMI_HOST", "127.0.0.1")
+AMI_PORT   = int(os.getenv("AMI_PORT", "5038"))
+AMI_USER   = os.getenv("AMI_USER", "admin")
+AMI_SECRET = os.getenv("AMI_SECRET", "asterisk_ami")
 
 # Preset selezionabili dall'app — formato "Nome:token,Nome:token"
 def _parse_presets(raw: str) -> list[dict]:
@@ -100,6 +106,56 @@ async def async_move_to_preset(preset_token: str):
     await loop.run_in_executor(None, move_to_preset, preset_token)
     state.current_preset = preset_token
     state.broadcast("ptz", preset_token)
+
+
+# --- Asterisk AMI helpers ---
+async def ami_originate_doorbell():
+    """
+    Origina una chiamata SIP tramite Asterisk AMI:
+    'citofono' chiama 'webapp' — simula il flusso fisico del DH-SB-86.
+    """
+    action_id = "doorbell-ring"
+    login_action = (
+        "Action: Login\r\n"
+        f"Username: {AMI_USER}\r\n"
+        f"Secret: {AMI_SECRET}\r\n"
+        f"ActionID: login-{action_id}\r\n"
+        "\r\n"
+    )
+    originate_action = (
+        "Action: Originate\r\n"
+        f"ActionID: {action_id}\r\n"
+        # Local channel: una metà esegue ring-all (Dial webapp+citofono),
+        # l'altra risponde con Echo. Chi risponde (browser o Linphone)
+        # si trova a parlare con l'altra metà del Local channel.
+        # Funziona anche se citofono (Linphone) non è registrato:
+        # Dial skippa silenziosamente i peer offline e suona solo webapp.
+        "Channel: Local/ring-all@doorbell\r\n"
+        "Application: Echo\r\n"
+        "CallerID: Citofono <citofono>\r\n"
+        "Timeout: 30000\r\n"
+        "Async: true\r\n"
+        "\r\n"
+    )
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(AMI_HOST, AMI_PORT), timeout=5
+        )
+        # Leggi banner
+        await asyncio.wait_for(reader.readline(), timeout=5)
+        # Login
+        writer.write(login_action.encode())
+        await writer.drain()
+        await asyncio.sleep(0.3)
+        # Originate
+        writer.write(originate_action.encode())
+        await writer.drain()
+        await asyncio.sleep(0.5)
+        writer.close()
+        await writer.wait_closed()
+        logger.info("[AMI] Originate inviato: citofono -> webapp")
+    except Exception as e:
+        logger.warning(f"[AMI] Impossibile originare chiamata (Asterisk up?): {e}")
 
 
 # --- Reset timer ---
@@ -188,6 +244,9 @@ async def ring():
 
     # Schedule auto-reset
     reset_task = asyncio.create_task(schedule_reset())
+
+    # Origina chiamata SIP tramite Asterisk AMI (fire-and-forget, non blocca)
+    asyncio.create_task(ami_originate_doorbell())
 
     return {"status": "ok", "message": "Ring processed"}
 
@@ -511,6 +570,55 @@ async def proxy_frigate_ws(websocket: WebSocket, path: str):
         await websocket.close(code=1011)
     except Exception as e:
         logger.error(f"[ws-proxy] ERRORE ({target_url}): {type(e).__name__}: {e}")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+
+@app.websocket("/api/sip/ws")
+async def proxy_sip_ws(websocket: WebSocket):
+    """
+    Proxy WebSocket SIP → Asterisk ws://127.0.0.1:8088/ws
+    Necessario perché l'app è servita via HTTPS e il browser blocca ws:// diretto.
+    JsSIP si connette a wss://host/api/sip/ws → backend proxia a ws://127.0.0.1:8088/ws.
+    Preserva il subprotocol 'sip' richiesto da JsSIP.
+    """
+    # Leggi il subprotocol richiesto dal client (di solito "sip")
+    requested_sub = websocket.headers.get("sec-websocket-protocol", "")
+    subprotocol = requested_sub.split(",")[0].strip() if requested_sub else None
+    await websocket.accept(subprotocol=subprotocol)
+
+    asterisk_ws_url = f"ws://{AMI_HOST}:8088/ws"
+    logger.info(f"[sip-ws-proxy] Nuovo client: {websocket.client}, subprotocol={subprotocol}")
+    try:
+        import websockets as ws_lib
+        extra = {"subprotocols": [subprotocol]} if subprotocol else {}
+        async with ws_lib.connect(asterisk_ws_url, **extra) as ast_ws:
+            async def from_asterisk():
+                async for msg in ast_ws:
+                    if isinstance(msg, bytes):
+                        await websocket.send_bytes(msg)
+                    else:
+                        await websocket.send_text(msg)
+
+            async def to_asterisk():
+                try:
+                    async for msg in websocket.iter_text():
+                        await ast_ws.send(msg)
+                except Exception:
+                    pass
+
+            tasks = [
+                asyncio.ensure_future(from_asterisk()),
+                asyncio.ensure_future(to_asterisk()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            logger.info("[sip-ws-proxy] Sessione terminata")
+    except Exception as e:
+        logger.error(f"[sip-ws-proxy] ERRORE: {type(e).__name__}: {e}")
         try:
             await websocket.close(code=1011)
         except Exception:

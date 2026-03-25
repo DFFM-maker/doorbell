@@ -14,11 +14,13 @@ export default function BottomNav({ view, onChange, dark = true }) {
   const pill     = dark ? 'bg-white/[0.06]'                   : 'bg-black/[0.06]'
 
   return (
-    <nav className={`
+    <nav
+      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      className={`
       flex items-center justify-around
       px-2 py-2
       border-t backdrop-blur-xl
-      safe-bottom shrink-0
+      shrink-0
       ${navBg}
     `}>
       {TABS.map(({ id, label, Icon }) => {

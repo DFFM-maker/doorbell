@@ -2,6 +2,65 @@
 
 ---
 
+## v3.0.0 — 2026-03-25
+
+### SIP/Asterisk + Dockerizzazione
+
+Integrazione audio bidirezionale tramite Asterisk, JsSIP nel browser e containerizzazione dell'infrastruttura.
+
+---
+
+### Nuove funzionalità
+
+#### 1. Asterisk in Docker
+
+- `docker-compose.yml` con servizio `asterisk` (`network_mode: host` per UDP SIP/RTP e WS)
+- `asterisk/Dockerfile` — immagine custom da `asterisk:latest`
+- Configurazioni: `pjsip.conf` (peer `webapp` + `citofono`), `extensions.conf` (dialplan `ring-all`), `manager.conf` (AMI), `rtp.conf`, `http.conf` (WS su porta 8088)
+
+#### 2. Backend — AMI Originate + SIP WS Proxy
+
+- `ami_originate_doorbell()` — al suono del campanello origina `Local/ring-all@doorbell` via Asterisk AMI TCP (porta 5038)
+- Dialplan `ring-all`: suona `PJSIP/webapp` e `PJSIP/citofono` simultaneamente; se citofono non è registrato, Dial lo skippa silenziosamente
+- `/api/sip/ws` — proxy WebSocket SIP verso `ws://127.0.0.1:8088/ws` (necessario per HTTPS/WSS); preserva subprotocol `sip` richiesto da JsSIP
+- Config AMI: `AMI_HOST`, `AMI_PORT`, `AMI_USER`, `AMI_SECRET` in `.env`
+
+#### 3. Frontend — SipPhone.jsx (JsSIP WebRTC)
+
+- `SipPhone` si registra come `sip:webapp@<host>` via WebSocket proxy del backend
+- Riceve chiamate in ingresso (dal citofono fisico o da Linphone in test)
+- UI bottom-sheet animata con framer-motion: stati `ringing` (Rispondi / Rifiuta) e `active` (Mute / Chiudi)
+- Indicatore `SIP Ready` / `SIP Error` fisso in basso a destra
+- Audio remoto su elemento `<audio autoPlay playsInline>` (iOS-safe)
+
+#### 4. Dockerfiles
+
+- `backend/Dockerfile` — `python:3.12-slim`, uvicorn su porta 8000
+- `frontend/Dockerfile` — build Vite + nginx, `nginx.conf` con SPA fallback e cache immutabile per gli asset
+
+---
+
+## v2.1.0 — 2026-03-10
+
+### Fix streaming, autenticazione e iOS
+
+Patch post-v2.0.0 che correggono regressioni critiche su MJPEG, SSE e iOS.
+
+---
+
+### Fix
+
+| Issue | Causa | Fix |
+|---|---|---|
+| MJPEG/SSE interrotti | `BaseHTTPMiddleware` bufferizza tutto il body prima di inviare | Riscrittura `APIKeyMiddleware` come ASGI puro (scope/receive/send) |
+| `422` su `/api/v1/events?key=` | `sse_events` mancava l'annotazione `Request` | Aggiunta annotazione; FastAPI non iniettava più il parametro |
+| Snapshot non autenticato su iOS | URL snapshot non includeva `?key=` | Chiave aggiunta anche all'URL snapshot in `App.jsx` |
+| Snapshot non mostrato su iOS | iOS Safari non supporta MJPEG multipart | `VideoCard`: rileva iOS → polling snapshot 500ms invece di MJPEG |
+| Blink snapshot ogni refresh iOS | `key` prop sull'`<img>` costringeva il remount | Rimosso `key` da `<img>` in `VideoCard` |
+| Ring non triggerava PTZ/SSE | `/api/v1/ring` chiamato da HA (server-to-server) richiedeva API key | Endpoint aggiunto a `_EXEMPT` in `APIKeyMiddleware` |
+
+---
+
 ## v2.0.0 — 2026-03-10
 
 ### Geist UI Redesign + Autenticazione + Fix iOS

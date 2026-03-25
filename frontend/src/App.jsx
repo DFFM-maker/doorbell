@@ -5,6 +5,7 @@ import ConciergeView from './views/ConciergeView'
 import OpsView       from './views/OpsView'
 import BottomNav     from './components/BottomNav'
 import AuthScreen    from './components/AuthScreen'
+import SipPhone      from './components/SipPhone'
 const LS_KEY = 'doorbell_api_key'
 
 // ── Event log helpers ────────────────────────────────────────────────────────
@@ -199,47 +200,51 @@ export default function App() {
   const bgMap = { sentinel: 'bg-black', concierge: 'bg-white', ops: 'bg-geist-gray-50' }
 
   return (
-    <div className={`fixed inset-0 flex flex-col ${bgMap[view]} transition-colors duration-300`}>
+    <>
+      <div className={`fixed inset-0 flex flex-col ${bgMap[view]} transition-colors duration-300`}>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={view}
+            initial={vars.initial}
+            animate={vars.animate}
+            exit={vars.exit}
+            transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
+            className="flex flex-col flex-1 overflow-x-hidden overflow-y-auto"
+          >
+            {view === 'sentinel' && (
+              <SentinelView
+                status={status}
+                streamUrls={streamUrls}
+                currentPreset={currentPreset}
+                presets={presets}
+                gateState={gateState}
+                onOpenGate={handleOpenGate}
+                onPresetChange={handlePresetChange}
+                ptzLoading={ptzLoading}
+              />
+            )}
+            {view === 'concierge' && (
+              <ConciergeView
+                status={status}
+                streamUrls={streamUrls}
+                gateState={gateState}
+                onOpenGate={handleOpenGate}
+              />
+            )}
+            {view === 'ops' && (
+              <OpsView
+                events={events}
+                status={status}
+              />
+            )}
+          </motion.div>
+        </AnimatePresence>
 
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={view}
-          initial={vars.initial}
-          animate={vars.animate}
-          exit={vars.exit}
-          transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
-          className="flex flex-col flex-1 overflow-x-hidden overflow-y-auto"
-        >
-          {view === 'sentinel' && (
-            <SentinelView
-              status={status}
-              streamUrls={streamUrls}
-              currentPreset={currentPreset}
-              presets={presets}
-              gateState={gateState}
-              onOpenGate={handleOpenGate}
-              onPresetChange={handlePresetChange}
-              ptzLoading={ptzLoading}
-            />
-          )}
-          {view === 'concierge' && (
-            <ConciergeView
-              status={status}
-              streamUrls={streamUrls}
-              gateState={gateState}
-              onOpenGate={handleOpenGate}
-            />
-          )}
-          {view === 'ops' && (
-            <OpsView
-              events={events}
-              status={status}
-            />
-          )}
-        </motion.div>
-      </AnimatePresence>
+        <BottomNav view={view} onChange={handleViewChange} dark={view === 'sentinel'} />
+      </div>
 
-      <BottomNav view={view} onChange={handleViewChange} dark={view === 'sentinel'} />
-    </div>
+      {/* SIP phone overlay — sempre montato per ricevere chiamate in background */}
+      <SipPhone visible={true} />
+    </>
   )
 }

@@ -72,13 +72,13 @@ function ControlPad() {
           key={label}
           className="flex items-center justify-center gap-2
             py-3 rounded-geist
-            border border-[#2a2a2a] text-geist-gray-600
-            hover:border-[#444] hover:text-geist-gray-400
-            active:bg-white/[0.03]
-            text-xs font-medium tracking-wide
+            border border-white/10 text-white/60
+            hover:border-white/20 hover:text-white/80
+            active:bg-white/[0.05]
+            text-xs font-semibold tracking-wide
             transition-all duration-150"
         >
-          <Icon size={14} strokeWidth={1.5} />
+          <Icon size={16} strokeWidth={2} />
           {label}
         </button>
       ))}

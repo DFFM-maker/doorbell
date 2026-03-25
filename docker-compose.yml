@@ -1,0 +1,15 @@
+version: "3.9"
+
+# Backend e frontend girano direttamente sull'host (uvicorn + vite/nginx).
+# Asterisk gira in Docker con network_mode: host per UDP SIP/RTP e WS.
+
+services:
+  asterisk:
+    build: ./asterisk
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - asterisk-data:/var/lib/asterisk
+
+volumes:
+  asterisk-data:
