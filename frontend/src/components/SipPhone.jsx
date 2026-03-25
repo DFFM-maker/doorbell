@@ -151,92 +151,86 @@ export default function SipPhone({ visible = true }) {
 
       <AnimatePresence>
         {(sipStatus === 'ringing' || sipStatus === 'active') && (
-          <div
-            className="fixed bottom-0 left-0 right-0 z-[1000] w-full max-w-[100vw]
-                       px-4 pointer-events-auto box-border"
-            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 16px) + 8px)', paddingTop: '16px' }}
+          <motion.div
+            key="sipphone"
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ duration: 0.35, type: 'spring', damping: 28, stiffness: 320 }}
+            className="fixed bottom-0 left-0 right-0 z-[9999] w-full bg-white
+                       border-t border-geist-gray-200 shadow-[0_-8px_32px_rgba(0,0,0,0.18)]"
+            style={{ borderRadius: '16px 16px 0 0', boxSizing: 'border-box' }}
           >
-            <motion.div
-              key="sipphone"
-              initial={{ opacity: 0, y: 150 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 150 }}
-              transition={{ duration: 0.4, type: 'spring', damping: 25, stiffness: 300 }}
-              className="w-full bg-white border border-geist-gray-200 rounded-3xl
-                         shadow-[0_-5px_40px_rgba(0,0,0,0.3)] overflow-hidden"
-            >
-              {/* Header */}
-              <div className="flex items-center gap-3 px-5 py-5 border-b border-geist-gray-100 bg-geist-gray-50/50">
-                <span className={`w-3 h-3 rounded-full flex-shrink-0 ${
+            {/* Handle bar */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full bg-geist-gray-200" />
+            </div>
+
+            {/* Header — centrato */}
+            <div className="flex flex-col items-center gap-1 px-4 pt-2 pb-4">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                   sipStatus === 'ringing' ? 'bg-red-500 animate-live-pulse' : 'bg-geist-success'
                 }`} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-bold tracking-geist uppercase text-geist-gray-500">
-                    {sipStatus === 'ringing' ? 'Chiamata in arrivo' : 'Chiamata attiva'}
-                  </p>
-                  <p className="text-lg font-bold text-black truncate">{caller}</p>
-                </div>
+                <p className="text-[10px] font-bold tracking-geist uppercase text-geist-gray-500">
+                  {sipStatus === 'ringing' ? 'Chiamata in arrivo' : 'Chiamata attiva'}
+                </p>
               </div>
+              <p className="text-[18px] font-bold text-black">{caller}</p>
+            </div>
 
-              {/* Actions */}
-              <div className="flex items-center gap-4 px-5 py-8 bg-white w-full">
-                {sipStatus === 'ringing' && (
-                  <>
-                    <button
-                      onClick={reject}
-                      className="flex-1 flex flex-col items-center gap-2.5 active:scale-95 transition-transform"
-                    >
-                      <div className="w-full max-w-[80px] aspect-square flex items-center justify-center
-                                       rounded-2xl bg-red-500 text-white shadow-lg">
-                        <PhoneOff size={32} strokeWidth={2.5} />
-                      </div>
-                      <span className="text-[11px] font-bold text-geist-gray-600 uppercase tracking-widest">Rifiuta</span>
-                    </button>
+            {/* Actions */}
+            <div
+              className="flex flex-row gap-3 px-4 w-full box-border"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 16px) + 12px)' }}
+            >
+              {sipStatus === 'ringing' && (
+                <>
+                  <button
+                    onClick={reject}
+                    className="flex-1 flex items-center justify-center gap-2 h-[52px]
+                               rounded-xl bg-red-500 text-white font-semibold text-sm
+                               active:scale-95 transition-transform shadow-md"
+                  >
+                    <PhoneOff size={20} strokeWidth={2.5} />
+                    Rifiuta
+                  </button>
+                  <button
+                    onClick={answer}
+                    className="flex-1 flex items-center justify-center gap-2 h-[52px]
+                               rounded-xl bg-[#22c55e] text-white font-semibold text-sm
+                               active:scale-95 transition-transform shadow-md animate-ring-glow"
+                  >
+                    <PhoneIncoming size={20} strokeWidth={2.5} />
+                    Rispondi
+                  </button>
+                </>
+              )}
 
-                    <button
-                      onClick={answer}
-                      className="flex-1 flex flex-col items-center gap-2.5 active:scale-95 transition-transform"
-                    >
-                      <div className="w-full max-w-[80px] aspect-square flex items-center justify-center
-                                       rounded-2xl bg-geist-success text-white shadow-lg animate-ring-glow">
-                        <PhoneIncoming size={32} strokeWidth={2.5} />
-                      </div>
-                      <span className="text-[11px] font-bold text-geist-gray-600 uppercase tracking-widest">Rispondi</span>
-                    </button>
-                  </>
-                )}
-
-                {sipStatus === 'active' && (
-                  <>
-                    <button
-                      onClick={toggleMute}
-                      className="flex-1 flex flex-col items-center gap-2.5 active:scale-95 transition-transform"
-                    >
-                      <div className={`w-full max-w-[80px] aspect-square flex items-center justify-center
-                                       rounded-2xl shadow-md transition-all
-                                       ${muted ? 'bg-geist-gray-800 text-white' : 'bg-geist-gray-100 text-geist-gray-700'}`}>
-                        {muted ? <MicOff size={28} /> : <Mic size={28} />}
-                      </div>
-                      <span className="text-[11px] font-bold text-geist-gray-600 uppercase tracking-widest">
-                        {muted ? 'Unmute' : 'Mute'}
-                      </span>
-                    </button>
-
-                    <button
-                      onClick={hangup}
-                      className="flex-1 flex flex-col items-center gap-2.5 active:scale-95 transition-transform"
-                    >
-                      <div className="w-full max-w-[80px] aspect-square flex items-center justify-center
-                                       rounded-2xl bg-red-500 text-white shadow-lg">
-                        <PhoneOff size={28} />
-                      </div>
-                      <span className="text-[11px] font-bold text-geist-gray-600 uppercase tracking-widest">Chiudi</span>
-                    </button>
-                  </>
-                )}
-              </div>
-            </motion.div>
-          </div>
+              {sipStatus === 'active' && (
+                <>
+                  <button
+                    onClick={toggleMute}
+                    className={`flex-1 flex items-center justify-center gap-2 h-[52px]
+                                rounded-xl font-semibold text-sm active:scale-95 transition-all shadow-sm
+                                ${muted ? 'bg-geist-gray-800 text-white' : 'bg-geist-gray-100 text-geist-gray-700'}`}
+                  >
+                    {muted ? <MicOff size={18} /> : <Mic size={18} />}
+                    {muted ? 'Unmute' : 'Mute'}
+                  </button>
+                  <button
+                    onClick={hangup}
+                    className="flex-1 flex items-center justify-center gap-2 h-[52px]
+                               rounded-xl bg-red-500 text-white font-semibold text-sm
+                               active:scale-95 transition-transform shadow-md"
+                  >
+                    <PhoneOff size={18} />
+                    Chiudi
+                  </button>
+                </>
+              )}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
