@@ -584,6 +584,12 @@ async def proxy_sip_ws(websocket: WebSocket):
     JsSIP si connette a wss://host/api/sip/ws → backend proxia a ws://127.0.0.1:8088/ws.
     Preserva il subprotocol 'sip' richiesto da JsSIP.
     """
+    # Verifica API key prima di accettare la connessione
+    api_key = websocket.headers.get("x-api-key") or websocket.query_params.get("key")
+    if not WEB_API_KEY or api_key != WEB_API_KEY:
+        await websocket.close(code=1008)
+        return
+
     # Leggi il subprotocol richiesto dal client (di solito "sip")
     requested_sub = websocket.headers.get("sec-websocket-protocol", "")
     subprotocol = requested_sub.split(",")[0].strip() if requested_sub else None

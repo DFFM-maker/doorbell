@@ -8,6 +8,8 @@ backend/*.pyo
 
 # Secrets — NON committare mai
 backend/.env
+frontend/.env
+frontend/.env.local
 
 # Frontend build e dipendenze
 frontend/node_modules/
