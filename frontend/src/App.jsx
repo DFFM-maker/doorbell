@@ -45,7 +45,8 @@ export default function App() {
   const [gateState,     setGateState]     = useState('idle')
   const [ptzLoading,    setPtzLoading]    = useState(null)
   const [events,        setEvents]        = useState([...INITIAL_EVENTS].reverse())
-  const sseRef = useRef(null)
+  const sseRef     = useRef(null)
+  const sipPhoneRef = useRef(null)
 
   // ── Auth helpers ───────────────────────────────────────────────────────────
   const apiFetch = useCallback((url, opts = {}) => {
@@ -128,6 +129,7 @@ export default function App() {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             new Notification('Citofono', { body: 'Qualcuno ha suonato!', tag: 'doorbell' })
           }
+          sipPhoneRef.current?.callCitofono()
         }
         if (s === 'idle') setGateState(prev => prev === 'success' ? prev : 'idle')
       })
@@ -243,8 +245,8 @@ export default function App() {
         <BottomNav view={view} onChange={handleViewChange} dark={view === 'sentinel'} />
       </div>
 
-      {/* SIP phone overlay — sempre montato per ricevere chiamate in background */}
-      <SipPhone visible={true} />
+      {/* SIP phone overlay — sempre montato per ricevere/effettuare chiamate */}
+      <SipPhone ref={sipPhoneRef} visible={true} />
     </>
   )
 }

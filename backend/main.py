@@ -245,8 +245,8 @@ async def ring():
     # Schedule auto-reset
     reset_task = asyncio.create_task(schedule_reset())
 
-    # Origina chiamata SIP tramite Asterisk AMI (fire-and-forget, non blocca)
-    asyncio.create_task(ami_originate_doorbell())
+    # La webapp chiama citofono autonomamente via SSE ring event (callCitofono in SipPhone.jsx)
+    # AMI originate rimosso: eliminava race condition iOS (webapp non ancora registrata)
 
     return {"status": "ok", "message": "Ring processed"}
 

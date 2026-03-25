@@ -1,34 +1,44 @@
 /**
  * SipPhone.jsx
  * JsSIP WebRTC phone — si registra come 'webapp' su Asterisk via WebSocket.
- * Riceve chiamate in ingresso (dal citofono fisico o da Linphone in test).
- * Status: idle | ringing | active | error
+ *
+ * Flussi supportati:
+ *  A) Uscente  (HA → SSE ring → App.jsx chiama callCitofono())
+ *     webapp chiama sip:citofono — status: idle → calling → active
+ *  B) Entrante (Fanvil i10S fisico chiama webapp direttamente)
+ *     status: idle → ringing → active
+ *
+ * Status: idle | ringing | calling | active | error
  */
-import { useEffect, useRef, useState, useCallback } from 'react'
+import {
+  useEffect, useRef, useState, useCallback,
+  useImperativeHandle, forwardRef,
+} from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff } from 'lucide-react'
+import { Phone, PhoneOff, PhoneIncoming, PhoneOutgoing, Mic, MicOff, Loader } from 'lucide-react'
 import JsSIP from 'jssip'
 
 const Z_INDEX = { overlay: 9999, controls: 900 }
 
-// Costruisce l'URL WebSocket SIP usando il proxy backend (evita mixed-content su HTTPS)
-// Passa la API key come query param per autenticare il proxy
 function getSipWsUrl() {
   if (typeof window === 'undefined') return 'ws://localhost/api/sip/ws'
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const key = import.meta.env.VITE_SIP_API_KEY
-  const keyParam = key ? `?key=${encodeURIComponent(key)}` : ''
-  return `${proto}://${window.location.host}/api/sip/ws${keyParam}`
+  const key    = import.meta.env.VITE_SIP_API_KEY
+  const param  = key ? `?key=${encodeURIComponent(key)}` : ''
+  return `${proto}://${window.location.host}/api/sip/ws${param}`
 }
 
-export default function SipPhone({ visible = true }) {
-  const [sipStatus, setSipStatus] = useState('idle')   // idle | ringing | active | error
+const SipPhone = forwardRef(function SipPhone({ visible = true }, ref) {
+  const [sipStatus, setSipStatus] = useState('idle')
   const [muted,     setMuted]     = useState(false)
   const [caller,    setCaller]    = useState('')
 
-  const uaRef       = useRef(null)
-  const sessionRef  = useRef(null)
-  const audioRef    = useRef(null)   // <audio> element per l'audio remoto
+  const uaRef          = useRef(null)
+  const sessionRef     = useRef(null)
+  const audioRef       = useRef(null)
+  const registeredRef  = useRef(false)   // true dopo registered event
+  const callingRef     = useRef(false)   // guard anti-double-call
+  const pollRef        = useRef(null)    // interval per wait-registration
 
   // ── Registrazione JsSIP ───────────────────────────────────────────────────
   useEffect(() => {
@@ -54,21 +64,22 @@ export default function SipPhone({ visible = true }) {
 
     ua.on('connected',    () => {})
     ua.on('disconnected', () => {
-      setSipStatus(s => s === 'active' || s === 'ringing' ? s : 'error')
+      registeredRef.current = false
+      setSipStatus(s => s === 'active' || s === 'ringing' || s === 'calling' ? s : 'error')
     })
-    ua.on('registered',   () => setSipStatus('idle'))
-    ua.on('unregistered', () => setSipStatus('error'))
-    ua.on('registrationFailed', () => setSipStatus('error'))
+    ua.on('registered', () => {
+      registeredRef.current = true
+      setSipStatus('idle')
+    })
+    ua.on('unregistered',       () => { registeredRef.current = false; setSipStatus('error') })
+    ua.on('registrationFailed', () => { registeredRef.current = false; setSipStatus('error') })
 
+    // ── Chiamate ENTRANTI (Fanvil i10S fisico) ─────────────────────────────
     ua.on('newRTCSession', (data) => {
       const session = data.session
       if (session.direction !== 'incoming') return
 
-      // Scarta se siamo già in una chiamata
-      if (sessionRef.current) {
-        session.terminate()
-        return
-      }
+      if (sessionRef.current) { session.terminate(); return }
 
       sessionRef.current = session
       const raw = session.remote_identity?.display_name
@@ -77,31 +88,101 @@ export default function SipPhone({ visible = true }) {
       setCaller(raw.slice(0, 40))
       setSipStatus('ringing')
 
-      session.on('ended',   () => { sessionRef.current = null; setSipStatus('idle'); setMuted(false) })
-      session.on('failed',  () => { sessionRef.current = null; setSipStatus('idle'); setMuted(false) })
+      session.on('ended',    () => { sessionRef.current = null; setSipStatus('idle');  setMuted(false) })
+      session.on('failed',   () => { sessionRef.current = null; setSipStatus('idle');  setMuted(false) })
       session.on('accepted', () => setSipStatus('active'))
 
-      // Aggancia audio remoto quando arriva la traccia
-      session.connection?.addEventListener('track', (ev) => {
-        if (ev.streams && ev.streams[0] && audioRef.current) {
-          audioRef.current.srcObject = ev.streams[0]
-          audioRef.current.play().catch(() => {})
-        }
+      session.on('peerconnection', ({ peerconnection }) => {
+        peerconnection.addEventListener('track', (ev) => {
+          if (ev.streams?.[0] && audioRef.current) {
+            audioRef.current.srcObject = ev.streams[0]
+            audioRef.current.play().catch(() => {})
+          }
+        })
       })
     })
 
     ua.start()
 
     return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
       if (audioRef.current) {
         audioRef.current.pause()
         audioRef.current.srcObject = null
       }
+      registeredRef.current = false
+      callingRef.current    = false
       ua.stop()
       uaRef.current      = null
       sessionRef.current = null
     }
   }, [])
+
+  // ── callCitofono — esposta via ref a App.jsx ──────────────────────────────
+  const callCitofono = useCallback(() => {
+    if (sessionRef.current || callingRef.current) return   // già in chiamata o in attesa
+
+    callingRef.current = true
+
+    const doCall = () => {
+      const ua = uaRef.current
+      if (!ua) { callingRef.current = false; return }
+
+      setCaller('Citofono')
+      setSipStatus('calling')
+
+      try {
+        const target  = `sip:citofono@${window.location.hostname}`
+        const session = ua.call(target, {
+          mediaConstraints: { audio: true, video: false },
+          pcConfig: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+            ],
+          },
+        })
+        sessionRef.current = session
+
+        const reset = () => { sessionRef.current = null; callingRef.current = false; setSipStatus('idle'); setMuted(false) }
+        session.on('confirmed', () => setSipStatus('active'))
+        session.on('ended',     reset)
+        session.on('failed',    reset)
+
+        session.on('peerconnection', ({ peerconnection }) => {
+          peerconnection.addEventListener('track', (ev) => {
+            if (ev.streams?.[0] && audioRef.current) {
+              audioRef.current.srcObject = ev.streams[0]
+              audioRef.current.play().catch(() => {})
+            }
+          })
+        })
+      } catch {
+        sessionRef.current = null
+        callingRef.current = false
+        setSipStatus('error')
+      }
+    }
+
+    if (registeredRef.current) { doCall(); return }
+
+    // Attendi registrazione max 3s (polling 200ms)
+    const start = Date.now()
+    pollRef.current = setInterval(() => {
+      if (registeredRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+        doCall()
+      } else if (Date.now() - start > 3000) {
+        clearInterval(pollRef.current)
+        pollRef.current    = null
+        callingRef.current = false
+        setSipStatus('error')
+      }
+    }, 200)
+  }, [])
+
+  useImperativeHandle(ref, () => ({ callCitofono }), [callCitofono])
 
   // ── Azioni ────────────────────────────────────────────────────────────────
   const answer = useCallback(() => {
@@ -118,14 +199,8 @@ export default function SipPhone({ visible = true }) {
     })
   }, [])
 
-  const reject = useCallback(() => {
-    sessionRef.current?.terminate()
-  }, [])
-
-  const hangup = useCallback(() => {
-    sessionRef.current?.terminate()
-  }, [])
-
+  const reject     = useCallback(() => { sessionRef.current?.terminate() }, [])
+  const hangup     = useCallback(() => { sessionRef.current?.terminate() }, [])
   const toggleMute = useCallback(() => {
     const s = sessionRef.current
     if (!s) return
@@ -133,14 +208,15 @@ export default function SipPhone({ visible = true }) {
     else        { s.mute({ audio: true });   setMuted(true) }
   }, [muted])
 
-  // ── Niente da mostrare se idle e non visibile ─────────────────────────────
+  // ── Audio sempre presente (fix iOS) ───────────────────────────────────────
   if (!visible && sipStatus === 'idle') return (
     <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />
   )
 
+  const isOverlayVisible = sipStatus === 'ringing' || sipStatus === 'calling' || sipStatus === 'active'
+
   return (
     <>
-      {/* Audio element nascosto — NON display:none per evitare blocchi iOS */}
       <audio
         ref={audioRef}
         autoPlay
@@ -149,7 +225,7 @@ export default function SipPhone({ visible = true }) {
       />
 
       <AnimatePresence>
-        {(sipStatus === 'ringing' || sipStatus === 'active') && (
+        {isOverlayVisible && (
           <motion.div
             key="sipphone"
             initial={{ y: '100%' }}
@@ -165,14 +241,18 @@ export default function SipPhone({ visible = true }) {
               <div className="w-10 h-1 rounded-full bg-geist-gray-200" />
             </div>
 
-            {/* Header — centrato */}
+            {/* Header */}
             <div className="flex flex-col items-center gap-1 px-4 pt-2 pb-4">
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                  sipStatus === 'ringing' ? 'bg-red-500 animate-live-pulse' : 'bg-geist-success'
+                  sipStatus === 'ringing' ? 'bg-red-500 animate-live-pulse'
+                  : sipStatus === 'calling' ? 'bg-yellow-400 animate-live-pulse'
+                  : 'bg-geist-success'
                 }`} />
                 <p className="text-[10px] font-bold tracking-geist uppercase text-geist-gray-500">
-                  {sipStatus === 'ringing' ? 'Chiamata in arrivo' : 'Chiamata attiva'}
+                  {sipStatus === 'ringing'  ? 'Chiamata in arrivo'
+                   : sipStatus === 'calling' ? 'Connessione...'
+                   : 'Chiamata attiva'}
                 </p>
               </div>
               <p className="text-[18px] font-bold text-black">{caller}</p>
@@ -208,6 +288,19 @@ export default function SipPhone({ visible = true }) {
                 </>
               )}
 
+              {sipStatus === 'calling' && (
+                <button
+                  onClick={hangup}
+                  aria-label="Annulla chiamata"
+                  className="flex-1 flex items-center justify-center gap-2 h-[52px]
+                             rounded-xl bg-red-500 text-white font-semibold text-sm
+                             active:scale-95 transition-transform shadow-md"
+                >
+                  <Loader size={18} className="animate-spin" />
+                  Annulla
+                </button>
+              )}
+
               {sipStatus === 'active' && (
                 <>
                   <button
@@ -238,7 +331,7 @@ export default function SipPhone({ visible = true }) {
         )}
       </AnimatePresence>
 
-      {/* Indicatori di stato fissi */}
+      {/* Badge stato */}
       <div
         className="fixed right-6"
         style={{ bottom: 'calc(6rem + env(safe-area-inset-bottom, 16px))', zIndex: Z_INDEX.controls }}
@@ -250,7 +343,6 @@ export default function SipPhone({ visible = true }) {
             <span className="text-[10px] font-bold text-geist-gray-600 uppercase tracking-widest">SIP Ready</span>
           </div>
         )}
-
         {visible && sipStatus === 'error' && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-red-50/90 backdrop-blur-xl border border-red-200 shadow-md">
             <div className="w-2 h-2 rounded-full bg-red-500" />
@@ -261,4 +353,6 @@ export default function SipPhone({ visible = true }) {
       </div>
     </>
   )
-}
+})
+
+export default SipPhone
